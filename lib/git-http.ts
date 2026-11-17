@@ -155,12 +155,107 @@ function resolveToCommit(repo: Repo, oid: string): string | undefined {
   }
 }
 
+/**
+ * Memoized commit parents + depths, per repo. Commits are immutable, so a
+ * commit's parents and its depth (longest path from a root, root = 0) never
+ * change once computed; only successful parses are cached, so a commit whose
+ * parent is not in the repo yet simply misses and is recomputed later.
+ * This turns the fast-forward check from O(chain) parseCommit calls per
+ * push into O(1) amortized work: the push bench walks a 200-commit chain
+ * 200 times, which was the dominant cost in receive-pack.
+ */
+const commitParentsCache = new WeakMap<Repo, Map<string, string[]>>();
+const commitDepthCache = new WeakMap<Repo, Map<string, number>>();
+
+/** Parents of a commit, memoized; undefined when the oid is not a parsable commit in this repo. */
+function commitParents(repo: Repo, oid: string): string[] | undefined {
+  let perRepo = commitParentsCache.get(repo);
+  if (perRepo === undefined) {
+    perRepo = new Map<string, string[]>();
+    commitParentsCache.set(repo, perRepo);
+  }
+  const cached = perRepo.get(oid);
+  if (cached !== undefined) return cached;
+  const object = repo.objects.get(oid);
+  if (object === undefined || object.type !== 'commit') return undefined;
+  let parents: string[];
+  try {
+    parents = parseCommit(object.data).parents;
+  } catch {
+    return undefined;
+  }
+  perRepo.set(oid, parents);
+  return parents;
+}
+
+/** Depth of a commit (0 for a root), memoized; undefined when any ancestor is missing, unparsable, or cyclic. Iterative post-order, so long chains cannot blow the stack. */
+function commitDepth(repo: Repo, oid: string): number | undefined {
+  let perRepo = commitDepthCache.get(repo);
+  if (perRepo === undefined) {
+    perRepo = new Map<string, number>();
+    commitDepthCache.set(repo, perRepo);
+  }
+  const cached = perRepo.get(oid);
+  if (cached !== undefined) return cached;
+  const visiting = new Set<string>();
+  const stack: Array<{ oid: string; processed: boolean }> = [{ oid, processed: false }];
+  while (stack.length > 0) {
+    const frame = stack.pop() as { oid: string; processed: boolean };
+    if (perRepo.has(frame.oid)) continue;
+    if (frame.processed) {
+      const parents = commitParents(repo, frame.oid);
+      if (parents === undefined) return undefined;
+      let depth = 0;
+      for (const parent of parents) {
+        const parentDepth = perRepo.get(parent);
+        if (parentDepth === undefined) return undefined;
+        if (parentDepth + 1 > depth) depth = parentDepth + 1;
+      }
+      perRepo.set(frame.oid, depth);
+      visiting.delete(frame.oid);
+      continue;
+    }
+    if (visiting.has(frame.oid)) return undefined;
+    const parents = commitParents(repo, frame.oid);
+    if (parents === undefined) return undefined;
+    visiting.add(frame.oid);
+    stack.push({ oid: frame.oid, processed: true });
+    for (const parent of parents) {
+      if (!perRepo.has(parent)) stack.push({ oid: parent, processed: false });
+    }
+  }
+  return perRepo.get(oid);
+}
+
 /** True when `ancestor` is `descendant` itself or one of its commit ancestors. */
 function isAncestorOrEqual(repo: Repo, ancestor: string, descendant: string): boolean {
   if (ancestor === descendant) return true;
   const ancestorCommit = resolveToCommit(repo, ancestor);
   const descendantCommit = resolveToCommit(repo, descendant);
   if (ancestorCommit === undefined || descendantCommit === undefined) return false;
+  const ancestorDepth = commitDepth(repo, ancestorCommit);
+  const descendantDepth = commitDepth(repo, descendantCommit);
+  if (ancestorDepth !== undefined && descendantDepth !== undefined) {
+    // A strict ancestor has strictly smaller depth, and depths strictly
+    // decrease along every parent edge, so the walk below only needs to
+    // visit commits deeper than the ancestor.
+    if (descendantDepth <= ancestorDepth) return false;
+    const seen = new Set<string>();
+    const stack: string[] = [descendantCommit];
+    while (stack.length > 0) {
+      const oid = stack.pop() as string;
+      if (oid === ancestorCommit) return true;
+      if (seen.has(oid)) continue;
+      seen.add(oid);
+      const depth = commitDepth(repo, oid);
+      if (depth === undefined || depth <= ancestorDepth) continue;
+      const parents = commitParents(repo, oid);
+      if (parents === undefined) continue;
+      for (const parent of parents) stack.push(parent);
+    }
+    return false;
+  }
+  // Depths unavailable (missing/unparsable ancestor somewhere): the full walk.
   const seen = new Set<string>();
   const stack: string[] = [descendantCommit];
   while (stack.length > 0) {
@@ -168,15 +263,9 @@ function isAncestorOrEqual(repo: Repo, ancestor: string, descendant: string): bo
     if (oid === ancestorCommit) return true;
     if (seen.has(oid)) continue;
     seen.add(oid);
-    const object = repo.objects.get(oid);
-    if (object === undefined || object.type !== 'commit') continue;
-    let commit;
-    try {
-      commit = parseCommit(object.data);
-    } catch {
-      continue;
-    }
-    for (const parent of commit.parents) stack.push(parent);
+    const parents = commitParents(repo, oid);
+    if (parents === undefined) continue;
+    for (const parent of parents) stack.push(parent);
   }
   return false;
 }
