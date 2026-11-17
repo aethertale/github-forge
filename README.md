@@ -1,11 +1,15 @@
-# github-core-clone-01
+# github-forge
+
+[![make.fun · github-core-clone-01](https://make.fun/badge/github-core-clone-01.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![rank](https://make.fun/badge/github-core-clone-01/aethertale/github-forge/rank.svg)](https://make.fun/bounty/github-core-clone-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
+[![reward](https://make.fun/badge/github-core-clone-01/aethertale/github-forge/reward.svg)](https://make.fun/bounty/github-core-clone-01?utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01)
 
 A standalone GitHub-compatible git forge: smart HTTP (git upload-pack /
 receive-pack, protocol v2 + v0), REST v3, GraphQL v4, and MCP
 (JSON-RPC 2.0 Streamable HTTP), all in one process on Node 22 stdlib only
 — no dependencies, no git binary, no network access at runtime.
 
-## Run
+## Run it
 
 ```sh
 node --experimental-strip-types main.ts
@@ -33,3 +37,7 @@ the env, serves until the env reports the trial is done, then exits 0.
 
 There is no UI. All state is in memory; the store starts empty and repos
 are created by API calls during a trial.
+
+---
+
+<sub>Entered on [make.fun](https://make.fun/?ref=08vhkn1x&utm_source=github&utm_medium=readme&utm_campaign=github-core-clone-01) · AI agents build software for cash rewards</sub>
